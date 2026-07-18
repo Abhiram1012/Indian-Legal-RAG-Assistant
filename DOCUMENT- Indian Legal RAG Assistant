@@ -1,0 +1,160 @@
+DOCUMENT- Indian Legal RAG Assistant 
+ 
+The Indian Legal RAG Assistant is a Retrieval-Augmented Generation (RAG) system built 
+using: 
+ Streamlit – UI Layer 
+ Snowflake Snowpark – Data Access Layer 
+ Snowflake Cortex – AI & Embedding Engine 
+ Vector Similarity Search – Retrieval Layer 
+ 
+ 
+User Question 
+      ↓ 
+Streamlit UI 
+      ↓ 
+Snowflake Snowpark 
+      ↓ 
+Embedding Generation (Cortex) 
+      ↓ 
+Vector Similarity Search 
+      ↓ 
+Context Building (Truncated) 
+      ↓ 
+Cortex COMPLETE (LLM) 
+      ↓ 
+Grounded Legal Answer 
+ 
+ 
+ 
+Core Features 
+Tool Calling RAG 
+The system retrieves relevant statutory sections before calling the LLM. 
+�
+� Strict Grounding 
+The model is instructed to answer only from retrieved statutory text. 
+Citation Awareness 
+The model must cite section number and Act filename in the answer. 
+�
+�  Database & Schema Setup 
+CREATE OR REPLACE DATABASE LAW_FILES; 
+USE DATABASE LAW_FILES; 
+CREATE OR REPLACE SCHEMA DATA; 
+What this does: 
+ Creates a dedicated database for your legal system 
+ Creates a schema (DATA) to store: 
+o Tables 
+o Stages 
+o File formats 
+This keeps your project isolated and organized. 
+Create Target Table (Structured Legal Store) 
+CREATE OR REPLACE TABLE LEGAL_SECTIONS ( 
+ID STRING, 
+SECTION_NUMBER STRING, 
+SECTION_TEXT STRING, 
+FILENAME STRING, 
+PAGE_NUMBERS VARIANT, 
+EMBEDDING VECTOR(FLOAT, 768) 
+); 
+What this does: 
+ Stores section-level legal chunks 
+ VARIANT → stores JSON arrays (page_numbers) 
+ VECTOR(768) → stores embedding from arctic model 
+This is your vector-enabled legal index. 
+Create File Format (JSON) 
+CREATE OR REPLACE FILE FORMAT LEGAL_JSON_FORMAT 
+TYPE = JSON; 
+Why? 
+Snowflake needs a format definition to read JSON files correctly. 
+Create Stage (Very Important Step) 
+You must create a stage before loading files. 
+CREATE OR REPLACE STAGE BHARATIYA_NAGARIK_STAGE 
+FILE_FORMAT = LEGAL_JSON_FORMAT; 
+⬆  
+Upload Files Into Stage 
+From Snowsight: 
+1. Go to Data → Databases 
+2. Open LAW_FILES → DATA 
+3. Click Stages 
+4. Open BHARATIYA_NAGARIK_STAGE 
+5. Upload JSON file (from your chunks folder) 
+OR via SQL: 
+PUT file://local_path/Bharatiya_Nagarik_Suraksha_Sanhita_2023.json 
+@BHARATIYA_NAGARIK_STAGE; 
+Create Raw Table (Landing Zone) 
+CREATE OR REPLACE TABLE LEGAL_SECTIONS_RAW ( 
+RAW VARIANT 
+); 
+Why? 
+This is: 
+ Landing table 
+ Audit layer 
+ Allows reprocessing 
+ Production-grade ETL pattern 
+Load JSON Into Raw Table 
+COPY INTO LEGAL_SECTIONS_RAW 
+FROM @BHARATIYA_NAGARIK_STAGE 
+FILE_FORMAT = LEGAL_JSON_FORMAT; 
+What happens: 
+ Entire JSON file loads as VARIANT 
+ Each row contains JSON array 
+Transform Raw → Structured Table 
+INSERT INTO LEGAL_SECTIONS  
+(ID, SECTION_NUMBER, SECTION_TEXT, FILENAME, PAGE_NUMBERS) 
+SELECT 
+VALUE:id::STRING, 
+VALUE:section_number::STRING, 
+VALUE:text::STRING, 
+VALUE:filename::STRING, 
+VALUE:page_numbers 
+FROM LEGAL_SECTIONS_RAW, 
+LATERAL FLATTEN(INPUT => RAW); 
+What this does: 
+ Flattens JSON array 
+ Extracts each section 
+ Inserts structured records 
+Now your vector-ready table is populated. 
+Generate Embeddings 
+UPDATE LEGAL_SECTIONS 
+SET EMBEDDING = SNOWFLAKE.CORTEX.EMBED_TEXT_768( 
+'snowflake-arctic-embed-m-v1.5', 
+SECTION_TEXT 
+) 
+WHERE EMBEDDING IS NULL; 
+What this does: 
+ Converts each section into a 768-dimension vector 
+ Stores inside VECTOR column 
+Now semantic search is possible. 
+Repeat for Other Acts 
+For each Act: 
+Create new stage 
+CREATE OR REPLACE STAGE IPC_STAGE 
+FILE_FORMAT = LEGAL_JSON_FORMAT; 
+Upload IPC JSON file into that stage 
+Copy into RAW table 
+COPY INTO LEGAL_SECTIONS_RAW 
+FROM @IPC_STAGE 
+FILE_FORMAT = LEGAL_JSON_FORMAT; 
+Run same INSERT transformation 
+Run embedding update again 
+Since you use: 
+WHERE EMBEDDING IS NULL 
+It only generates vectors for new rows. 
+Clean and eAicient. 
+Final Architecture Summary 
+1. Stage (file storage) 
+2. Raw table (landing layer) 
+3. Structured table (section-level) 
+4. Vector embedding generation 
+5. Semantic search 
+6. RAG answer generation 
+7. Streamlit UI 
+This is enterprise-level ETL + AI integration. 
+Why This Design Is Strong 
+ Reusable for any Act 
+ Scalable 
+ Auditable 
+ Vector-enabled 
+ Fully Snowflake-native 
+ No external infrastructure 
+LASTLY I MAKE STREAMLIT APP WHICH IS INBUILT IN SNOWFLAKE 
+https://indian-legal-rag-assistant.streamlit.app/ 
