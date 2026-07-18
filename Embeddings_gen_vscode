@@ -1,0 +1,129 @@
+# ============================================================
+# COMPLETE SCRIPT: Generate real embeddings for LEGAL_SECTIONS
+# Run this LOCALLY (not in Snowflake) — requires internet access
+# ============================================================
+#
+# Prerequisites:
+#   pip install sentence-transformers snowflake-connector-python numpy
+#
+# Usage:
+#   1. Update SNOWFLAKE_PASSWORD below (or use externalbrowser auth)
+#   2. Run this entire cell
+#   3. It will generate real embeddings and update your Snowflake table
+# ============================================================
+
+import os
+import numpy as np
+import snowflake.connector
+from sentence_transformers import SentenceTransformer
+
+# --- CONFIGURATION ---
+SNOWFLAKE_ACCOUNT = "pfb17012"
+SNOWFLAKE_USER = "ABHIC"
+SNOWFLAKE_PASSWORD = os.environ.get("SNOWFLAKE_PASSWORD", "Qwertyuiop@123")  # Or use externalbrowser
+SNOWFLAKE_DATABASE = "LAW_FILES"
+SNOWFLAKE_SCHEMA = "DATA"
+SNOWFLAKE_WAREHOUSE = "COMPUTE_WH"
+MODEL_NAME = "Snowflake/snowflake-arctic-embed-m-v1.5"
+
+# --- STEP 1: Load embedding model ---
+print(f"[1/5] Loading model: {MODEL_NAME}")
+model = SentenceTransformer(MODEL_NAME)
+print(f"       Model loaded. Dimension: {model.get_sentence_embedding_dimension()}")
+
+# --- STEP 2: Connect to Snowflake ---
+print("\n[2/5] Connecting to Snowflake...")
+
+# Option A: Password auth (default)
+conn = snowflake.connector.connect(
+    account=SNOWFLAKE_ACCOUNT,
+    user=SNOWFLAKE_USER,
+    password=SNOWFLAKE_PASSWORD,
+    database=SNOWFLAKE_DATABASE,
+    schema=SNOWFLAKE_SCHEMA,
+    warehouse=SNOWFLAKE_WAREHOUSE
+)
+
+# Option B: Browser SSO (uncomment below, comment out Option A above)
+# conn = snowflake.connector.connect(
+#     account=SNOWFLAKE_ACCOUNT,
+#     user=SNOWFLAKE_USER,
+#     authenticator="externalbrowser",
+#     database=SNOWFLAKE_DATABASE,
+#     schema=SNOWFLAKE_SCHEMA,
+#     warehouse=SNOWFLAKE_WAREHOUSE
+# )
+
+cursor = conn.cursor()
+print("       Connected.")
+
+# --- STEP 3: Fetch all sections ---
+print("\n[3/5] Fetching sections from LEGAL_SECTIONS...")
+cursor.execute("SELECT ID, SECTION_TEXT FROM LEGAL_SECTIONS WHERE SECTION_TEXT IS NOT NULL")
+rows = cursor.fetchall()
+ids = [r[0] for r in rows]
+texts = [r[1] for r in rows]
+print(f"       Fetched {len(rows)} sections.")
+
+# --- STEP 4: Generate embeddings ---
+print(f"\n[4/5] Generating embeddings (batch_size=32)...")
+embeddings = model.encode(texts, show_progress_bar=True, batch_size=32, normalize_embeddings=True)
+print(f"       Generated {len(embeddings)} embeddings of dimension {embeddings.shape[1]}")
+
+# --- STEP 5: Update Snowflake table ---
+print(f"\n[5/5] Updating LEGAL_SECTIONS with real embeddings...")
+for i, (section_id, emb) in enumerate(zip(ids, embeddings)):
+    vec_str = "[" + ",".join(f"{v:.8f}" for v in emb.tolist()) + "]"
+    cursor.execute(
+        f"UPDATE LEGAL_SECTIONS SET EMBEDDING = {vec_str}::VECTOR(FLOAT, 768) WHERE ID = %s",
+        (section_id,)
+    )
+    if (i + 1) % 100 == 0:
+        print(f"       Updated {i + 1}/{len(ids)} rows...")
+
+print(f"       Done! Updated {len(ids)} rows.")
+
+# --- BONUS: Create QUERY_EMBEDDINGS lookup table ---
+print("\n[BONUS] Creating QUERY_EMBEDDINGS table for common legal terms...")
+common_terms = [
+    "theft", "robbery", "murder", "assault", "kidnapping", "fraud",
+    "defamation", "forgery", "cheating", "extortion", "criminal conspiracy",
+    "dowry death", "rape", "abetment", "attempt", "culpable homicide",
+    "grievous hurt", "wrongful confinement", "trespass", "mischief",
+    "bail", "arrest", "search warrant", "investigation", "trial",
+    "evidence", "witness", "confession", "dying declaration",
+    "immigration", "visa", "deportation", "foreigner", "passport",
+    "punishment", "fine", "imprisonment", "death penalty", "life imprisonment",
+    "self defence", "right of private defence", "negligence",
+    "criminal breach of trust", "sedition", "waging war",
+    "counterfeiting", "obscenity", "bigamy", "cruelty", "stalking",
+    "voyeurism", "acid attack", "domestic violence"
+]
+
+term_embeddings = model.encode(common_terms, normalize_embeddings=True)
+
+cursor.execute("""
+    CREATE TABLE IF NOT EXISTS QUERY_EMBEDDINGS (
+        TERM STRING,
+        EMBEDDING VECTOR(FLOAT, 768)
+    )
+""")
+cursor.execute("DELETE FROM QUERY_EMBEDDINGS")
+
+for term, emb in zip(common_terms, term_embeddings):
+    vec_str = "[" + ",".join(f"{v:.8f}" for v in emb.tolist()) + "]"
+    cursor.execute(
+        f"INSERT INTO QUERY_EMBEDDINGS (TERM, EMBEDDING) VALUES (%s, {vec_str}::VECTOR(FLOAT, 768))",
+        (term,)
+    )
+
+print(f"       Created QUERY_EMBEDDINGS with {len(common_terms)} terms.")
+
+# --- DONE ---
+cursor.close()
+conn.close()
+print("\n" + "="*50)
+print("ALL DONE! Your table now has real semantic embeddings.")
+print("The Streamlit app can use QUERY_EMBEDDINGS for")
+print("approximate semantic search without AI_EMBED.")
+print("="*50)
