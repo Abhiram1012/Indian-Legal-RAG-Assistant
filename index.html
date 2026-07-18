@@ -1,0 +1,107 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Indian Legal RAG</title>
+    <style>
+        body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background-color: #f4f7f6; margin: 0; padding: 20px; color: #333; }
+        .container { max-width: 800px; margin: 0 auto; }
+        .header { text-align: center; margin-bottom: 30px; }
+        .search-box { display: flex; gap: 10px; margin-bottom: 20px; }
+        input[type="text"] { flex-grow: 1; padding: 15px; font-size: 16px; border: 1px solid #ccc; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.05); }
+        button { padding: 15px 25px; font-size: 16px; background-color: #0056b3; color: white; border: none; border-radius: 8px; cursor: pointer; transition: background 0.2s; }
+        button:hover { background-color: #004494; }
+        button:disabled { background-color: #a0c4e8; cursor: not-allowed; }
+        
+        .loading { text-align: center; display: none; color: #666; margin: 20px 0; font-style: italic; }
+        
+        .result-card { background: white; padding: 20px; border-radius: 8px; margin-bottom: 15px; box-shadow: 0 2px 8px rgba(0,0,0,0.1); border-left: 5px solid #0056b3; }
+        .result-header { display: flex; justify-content: space-between; border-bottom: 1px solid #eee; padding-bottom: 10px; margin-bottom: 10px; }
+        .result-title { font-weight: bold; font-size: 18px; color: #0056b3; }
+        .result-score { color: #888; font-size: 14px; }
+        .result-text { line-height: 1.6; white-space: pre-wrap; }
+        .no-results { text-align: center; color: #888; padding: 20px; }
+    </style>
+</head>
+<body>
+
+<div class="container">
+    <div class="header">
+        <h1>Indian Legal RAG</h1>
+        <p>Ask a legal question or search for a specific section</p>
+    </div>
+
+    <div class="search-box">
+        <input type="text" id="questionInput" placeholder="e.g., Explain the offence of robbery under the Indian Penal Code..." autocomplete="off">
+        <button id="searchBtn" onclick="askQuestion()">Search</button>
+    </div>
+
+    <div id="loading" class="loading">Searching legal database...</div>
+    <div id="resultsArea"></div>
+</div>
+
+<script>
+    // Allow pressing 'Enter' to search
+    document.getElementById("questionInput").addEventListener("keypress", function(event) {
+        if (event.key === "Enter") {
+            event.preventDefault();
+            askQuestion();
+        }
+    });
+
+    async function askQuestion() {
+        const query = document.getElementById('questionInput').value.trim();
+        if (!query) return;
+
+        // UI Updates during loading
+        const btn = document.getElementById('searchBtn');
+        const loading = document.getElementById('loading');
+        const resultsArea = document.getElementById('resultsArea');
+        
+        btn.disabled = true;
+        btn.innerText = "Searching...";
+        loading.style.display = "block";
+        resultsArea.innerHTML = "";
+
+        try {
+            // Call the Python Flask backend
+            const response = await fetch('/ask', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ question: query })
+            });
+            
+            const data = await response.json();
+            
+            // Render the results
+            if (data.length === 0) {
+                resultsArea.innerHTML = `<div class="no-results">No relevant sections found in the database.</div>`;
+            } else {
+                data.forEach((item, index) => {
+                    const card = `
+                        <div class="result-card">
+                            <div class="result-header">
+                                <span class="result-title">Section ${item.section} | ${item.act}</span>
+                                <span class="result-score">Score: ${item.score}</span>
+                            </div>
+                            <div class="result-text">${item.text}</div>
+                        </div>
+                    `;
+                    resultsArea.innerHTML += card;
+                });
+            }
+        } catch (error) {
+            resultsArea.innerHTML = `<div class="no-results" style="color: red;">Error connecting to the server.</div>`;
+            console.error("Error:", error);
+        } finally {
+            // Reset UI
+            btn.disabled = false;
+            btn.innerText = "Search";
+            loading.style.display = "none";
+        }
+    }
+</script>
+
+</body>
+</html>
